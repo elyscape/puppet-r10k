@@ -30,6 +30,10 @@ else
   raise "Configuration file: #{WEBHOOK_CONFIG} does not exist"
 end
 
+$digester = OpenSSL::Digest::SHA256.new
+$userdigest = $digester.hexdigest($config['user'])
+$passdigest = $digester.hexdigest($config['pass'])
+
 ENV['HOME'] = '/var/lib/peadmin'
 ENV['PATH'] = '/sbin:/usr/sbin:/bin:/usr/bin:/opt/puppet/bin'
 
@@ -122,6 +126,23 @@ class Server  < Sinatra::Base
 
   helpers do
 
+    def deploy(name, type)
+      if $config['use_mcollective']
+        mco_deploy(name, type)
+      else
+        local_deploy(name, type)
+      end
+    end
+
+    def mco_deploy(name, type)
+      if $config['use_mco_ruby']
+        return
+      end
+    end
+
+    def local_deploy(name, type)
+    end
+
     def deploy_module(module_name)
       begin
         if $config['use_mcollective']
@@ -173,7 +194,7 @@ class Server  < Sinatra::Base
      client = rpcclient('r10k', :exit_on_failure => false,:options => options)
      client.discovery_timeout = $config['discovery_timeout']
      client.timeout           = $config['client_timeout']
-     result = client.send('deploy',{:environment => branch})
+     client.send('deploy',{:environment => branch})
    end # end deploy()
 
 
@@ -187,11 +208,12 @@ class Server  < Sinatra::Base
     def authorized?
       @auth ||=  Rack::Auth::Basic::Request.new(request.env)
       @auth.provided? && @auth.basic? && @auth.credentials &&
-      @auth.credentials == [$config['user'],$config['pass']]
+      Rack::Utils.secure_compare($digester.hexdigest(@auth.credentials.first), $userdigest) &&
+      Rack::Utils.secure_compare($digester.hexdigest(@auth.credentials.last), $passdigest)
     end  #end authorized?
 
     def run_prefix_command(payload)
-      IO.popen($config['prefix_command'], mode='r+') do |io|
+      IO.popen($config['prefix_command'], 'r+') do |io|
           io.write payload.to_s
           io.close_write
           begin
